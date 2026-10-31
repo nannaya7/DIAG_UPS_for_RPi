@@ -1,0 +1,18 @@
+# Keil build outputs
+MDK-ARM/*/
+!MDK-ARM/DebugConfig/
+!MDK-ARM/RTE/
+*.o
+*.d
+*.crf
+*.axf
+*.hex
+*.lst
+*.map
+*.htm
+*.dep
+*.build_log.htm
+JLinkLog.txt
+*.uvguix.*
+# Source Insight
+SI4/

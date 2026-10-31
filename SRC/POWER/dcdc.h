@@ -1,8 +1,8 @@
 /**
   ******************************************************************************
   * @file    dcdc.h
-  * @brief   DCDC (TPS61088 boost) state: ON/OFF via BOOST_EN, with a
-  *          latching FAULT state when the sensed output droops too low.
+  * @brief   DCDC (TPS61088 boost) state: ON/OFF via BOOST_EN. FAULT is
+  *          reserved for output sensing, which this board does not have.
   ******************************************************************************
   */
 #ifndef __DCDC_H
@@ -32,10 +32,9 @@ void Dcdc_On(void);
 void Dcdc_Off(void);
 
 /**
-  * @brief  While ON, checks DCDC_ADC and latches FAULT if it reads at or
-  *         below 4.7V. Called once per 1Hz wake tick from
-  *         UpdatePowerControl(). Once latched, FAULT only clears via
-  *         Dcdc_On()/Dcdc_Off().
+  * @brief  Called once per 1Hz wake tick from PowerControl_Update().
+  *         Currently a no-op: the board has no DCDC output sensing, so
+  *         DCDC_STATE_FAULT is never raised. Hook for future fault checks.
   */
 void Dcdc_Update(void);
 

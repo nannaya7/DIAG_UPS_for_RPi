@@ -1,19 +1,14 @@
 /**
   ******************************************************************************
   * @file    rgb_led.c
-  * @brief   RGB status LED array (LED2/4/5/6/7/8/9) PWM control over TIM1.
+  * @brief   RGB status LED PWM control over TIM1 CH1/CH2/CH3
+  *          (PWM_CH1/2/3 = PA8/PA9/PA10 = RED/GRN/BLU).
   *
-  * 2026-09-08 hardware rework (schematic v1.1, Sheet2_UPS_LED): the single
-  * common-anode LED2 was replaced by 7 parallel common-anode RGB LEDs
-  * (LED2/4/5/6/7/8/9, anodes tied to VMCU, each with its own per-color
-  * ballast resistor into a shared RED/GRN/BLU rail) so the combined
-  * cathode current no longer fits through a GPIO pin directly. Each color
-  * rail is now switched to GND by its own low-side N-FET (Q4/Q5/Q6,
-  * SI2302S) gated by TIM1 CH1/CH2/CH3 (PWM_CH1/2/3 = PA8/PA9/PA10).
-  * Gate HIGH turns the FET on (LED lit) -- the OPPOSITE sense of the old
-  * direct-drive cathode sink -- so CCR now maps straight to brightness,
-  * no inversion. TIM1's OCPolarity stays at CubeMX's default (active
-  * HIGH) so main.c is untouched by regeneration.
+  * The LEDs are common-anode and driven directly by the pins (DIAG_UPS v1.2):
+  * pin HIGH = OFF, pin LOW = lit. TIM1's output polarity is therefore
+  * inverted here (CCxP) so that CCR=0 holds the pin HIGH (LED fully off) and
+  * a larger CCR means brighter. Done in RgbLed_Init() rather than in CubeMX
+  * so regenerating main.c doesn't undo it.
   ******************************************************************************
   */
 #include "rgb_led.h"
@@ -30,25 +25,28 @@ static uint8_t        s_effectRed       = 0U;
 static uint8_t        s_effectGreen     = 0U;
 static uint8_t        s_effectBlue      = 0U;
 static uint32_t       s_halfPeriodMs    = 0U;   /* 0 = solid, no animation */
+static uint32_t       s_pulsePeriodMs   = 0U;   /* RGBLED_EFFECT_PULSE only */
 static uint32_t       s_effectStartTick = 0U;
 
 static uint32_t RgbLed_BrightnessToCcr(uint8_t brightness)
 {
   uint32_t period = htim1.Init.Period;
 
-  /* Low-side N-FET (Q4/Q5/Q6) per color rail: gate HIGH turns it on and
-     lights the LEDs, so more ON-time = brighter -- straight mapping,
-     no inversion (see file header). */
+  /* Output polarity is inverted in RgbLed_Init(), so CCR maps straight to
+     brightness (see file header). */
   return (period * (uint32_t)brightness) / RGB_LED_BRIGHTNESS_MAX;
 }
 
 void RgbLed_Init(void)
 {
+  /* Active-low outputs; set before the channels start so the pins never
+     glitch to "lit". CCR is 0 here (TIM1_Init pulse=0) -> pins stay HIGH. */
+  RgbLed_Off();
+  htim1.Instance->CCER |= (TIM_CCER_CC1P | TIM_CCER_CC2P | TIM_CCER_CC3P);
+
   HAL_TIM_PWM_Start(&htim1, RGB_LED_CHANNEL_RED);
   HAL_TIM_PWM_Start(&htim1, RGB_LED_CHANNEL_GREEN);
   HAL_TIM_PWM_Start(&htim1, RGB_LED_CHANNEL_BLUE);
-
-  RgbLed_Off();
 }
 
 void RgbLed_SetColor(uint8_t red, uint8_t green, uint8_t blue)
@@ -74,6 +72,13 @@ void RgbLed_SetEffect(RgbLedEffect_t effect, uint8_t red, uint8_t green,
   s_effectStartTick = HAL_GetTick();
 }
 
+void RgbLed_SetPulse(uint8_t red, uint8_t green, uint8_t blue,
+                      uint32_t onMs, uint32_t periodMs)
+{
+  RgbLed_SetEffect(RGBLED_EFFECT_PULSE, red, green, blue, onMs);
+  s_pulsePeriodMs = periodMs;
+}
+
 void RgbLed_Update(void)
 {
   uint32_t elapsed;
@@ -85,6 +90,15 @@ void RgbLed_Update(void)
   {
     /* period=0 -> solid on, no animation (matches AT+LED spec). */
     RgbLed_SetColor(s_effectRed, s_effectGreen, s_effectBlue);
+    return;
+  }
+
+  if (s_effect == RGBLED_EFFECT_PULSE)
+  {
+    /* s_halfPeriodMs holds the ON time here. */
+    uint8_t on = (s_pulsePeriodMs == 0U) ||
+                 (((HAL_GetTick() - s_effectStartTick) % s_pulsePeriodMs) < s_halfPeriodMs);
+    RgbLed_SetColor(on ? s_effectRed : 0U, on ? s_effectGreen : 0U, on ? s_effectBlue : 0U);
     return;
   }
 

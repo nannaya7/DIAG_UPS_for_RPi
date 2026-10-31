@@ -3,56 +3,69 @@
   * @file    at_protocol.c
   * @brief   AT-command line protocol between this MCU and the main board.
   *
-  * Wire format: ASCII "AT+XXXX" lines terminated by \r and/or \n, matching
-  * the style already used by DebugLog_Printf()/AtProtocol_Tx().
+  * Wire format: ASCII "AT+XXXX" lines terminated by  and/or 
+.
   *
-  * Direction / commands:
-  *  - Main board -> MCU: AT+RDY (boot complete)      -> MCU replies AT+OKAY.
-  *  - MCU -> main board: AT+PWR0 (power-off request), AT+BTN0/BTN1 (short/
-  *    long button press), AT+USB0/USB1 (plug in/out), AT+BATxx (SOC, 2-digit
-  *    hex), AT+BVTxx (cell voltage, 2-digit decimal tenths of a volt),
-  *    AT+BATL (battery-low alert) -- main board always replies AT+OKAY.
+  * Main board -> MCU:
+  *  - AT+RDY               boot complete; MCU replies AT+OKAY.
+  *  - AT+PWR0              power-off request (MCU runs the shutdown sequence).
+  *  - AT+LED,RR,GG,BB,PP   custom LED blink. RR/GG/BB are hex PWM duty
+  *                         (00-FF); PP is the hex blink half-period in units
+  *                         of 100ms (00 = solid on). Applied only while
+  *                         MCU_STATUS is MCU_POWER_ON, replied with AT+OKAY
+  *                         only when applied. Also stops the USB-based
+  *                         default LED color until the next power-on.
   *
-  * Outbound notifications are fire-and-forget. A long-button shutdown also
-  * sends AT+PWR0 but deliberately does not wait for a response because it is
-  * the forced-off path used when the main board may be unresponsive.
-  *
-  * AT+BATL is new (added 2026-07-29, after the initial protocol spec).
-  * (A periodic AT+PING heartbeat was added the same day and removed the
-  * next day, 2026-07-30 -- decided unnecessary.)
-  *
-  * AT+LED,RR,GG,BB,PP (added 2026-09-08): main board -> MCU, inbound.
-  * RR/GG/BB are hex PWM duty (00-FF, 0=off, FF=full brightness). PP is a
-  * hex blink half-period in units of 100ms (00-FF -> 0-25.5s; each of
-  * ON-time and OFF-time lasts PP*100ms, matching how the charge-status
-  * breathe periods are specified) -- PP=00 means solid on, no blinking.
-  * Only applied while MCU_STATUS is MCU_POWER_ON (the main board has no
-  * power to send this otherwise, but checking explicitly means a stray
-  * byte glitch during charge-check standby can't stomp on the SOC-based
-  * breathing LED there) -- MCU replies AT+OKAY only when actually applied.
-  * Also calls PowerControl_NotifyLedOverridden() so power_control.c's
-  * USB-based default (GREEN on USB / BLUE on battery, see power_control.c)
-  * stops overwriting this color on the next USB plug/unplug event, until
-  * the next power-on session resets it.
+  * MCU -> main board (fire-and-forget; the main board replies AT+OKAY):
+  *  - AT+PWR0              power-off request (forced long-press path; never
+  *                         waits for a response).
+  *  - AT+BTN0 / AT+BTN1    short / long button press.
+  *  - AT+USB0 / AT+USB1    USB plug in / out.
+  *  - AT+BATxx             SOC, 2-digit hex.
+  *  - AT+BVTxx             cell voltage, 2-digit decimal tenths of a volt.
+  *  - AT+BATL              battery-low alert.
+  *  - AT+OKAY              acknowledgement.
   ******************************************************************************
   */
 #include "at_protocol.h"
-#include "uart2_comm.h"
+#include "uart_router.h"
 #include "debug_log.h"
 #include "rgb_led.h"
 #include "mcu_power.h"
 #include "power_control.h"
 #include <string.h>
 
-/* USART3 is now a transparent bridge to the ADuCM355 (uart_router.c) and the
+/* USART3 is a transparent bridge to the ADuCM355 (uart_router.c) and the
    board has no commands of its own yet, so AT traffic is disabled: nothing is
-   sent, and nothing calls AtProtocol_OnRxData(). To re-enable, set to 1, add
-   uart2_comm.c back to the build, retarget it to USART3 through the router's
-   TX ring, and route un-prefixed USART3 data to AtProtocol_OnRxData(). */
+   sent, and nothing calls AtProtocol_OnRxData(). To re-enable, set to 1 and
+   route un-prefixed USART3 data to AtProtocol_OnRxData() in the router. */
 #define AT_PROTOCOL_ENABLED 0
 
 #if AT_PROTOCOL_ENABLED
-#define AtProtocol_Tx  Uart2Comm_Printf
+#include <stdarg.h>
+#include <stdio.h>
+
+#define AT_TX_BUF_SIZE  32U
+
+static void AtProtocol_Tx(const char *fmt, ...)
+{
+  char buf[AT_TX_BUF_SIZE];
+  va_list args;
+  int len;
+
+  va_start(args, fmt);
+  len = vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+
+  if (len > 0)
+  {
+    if ((unsigned int)len > (sizeof(buf) - 1U))
+    {
+      len = (int)sizeof(buf) - 1;
+    }
+    UartRouter_SendToHost((const uint8_t *)buf, (uint16_t)len);
+  }
+}
 #else
 #define AtProtocol_Tx(...)  ((void)0)
 #pragma diag_suppress 177 /* values only used by the (disabled) AtProtocol_Tx */

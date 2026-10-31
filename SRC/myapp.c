@@ -59,35 +59,28 @@
 
 void App_Start(void)
 {
+  /* First, so the LED pins go to "off" (HIGH) before the boot delay. */
+  RgbLed_Init();
+
   DebugLog_Init();
   Max17048_Init();
 
-  HAL_Delay(1000); /* Boot Delay 500ms */
+  HAL_Delay(1000); /* boot delay */
 
-  /* RgbLed_Init()/SleepMode_Init() must run before PowerControl_Init():
-     it may block in a charge-check standby loop (USB-only boot, no
-     button press yet) that drives the LED effect engine and polls
-     SleepMode_ConsumeWakeTick(), both of which need TIM1/TIM3 already
-     running. */
-  RgbLed_Init();
+  /* TIM1 (LED PWM) and TIM3 (1Hz tick) must be running before
+     PowerControl_Init(). */
   UartRouter_Init(); /* USART3 <-> USART2 transparent bridge */
   SleepMode_Init();
 
-  /* Logged here, before PowerControl_Init(), because that call can now
-     block for a long time in charge-check standby (USB-only boot, no
-     button press yet) -- an RTT log watcher should see the boot banner
-     right away, not only once someone eventually presses the button. */
-  DebugLog_Printf("\r\ncappic UPS: boot\r\n");
+  DebugLog_Printf("\r\nDiagnostic UPS: boot\r\n");
   PowerControl_Init();
 
-  /* 2026-09-08: SleepMode_Enter() (WFI) temporarily disabled -- keeps SWD
-     attached and the loop free-running so the LED breathing/blinking
-     effect (driven by HAL_GetTick(), needs finer-than-1Hz timing) stays
-     smooth. TIM3's 1Hz tick is untouched, so existing once-a-second logic
-     in UpdatePowerControl() still runs normally. */
+  /* SleepMode_Enter() (WFI) is not used yet: the loop free-runs so the LED
+     breathing effect (HAL_GetTick() based) stays smooth. See "향후: 전원
+     관리" in CLAUDE.md for the sleep requirements. */
   while (1)
   {
-    UpdatePowerControl();
+    PowerControl_Update();
   }
 }
 

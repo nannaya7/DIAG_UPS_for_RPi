@@ -1,12 +1,11 @@
 /**
   ******************************************************************************
   * @file    uart_router.c
-  * @brief   UART3 <-> UART2 transparent bridge (see uart_router.h).
+  * @brief   UART router (see uart_router.h).
   *
-  * All ring-buffer producers and consumers run in USART2/USART3 ISRs at the
-  * same NVIC priority, so they never preempt each other and no locking is
-  * needed. A producer outside these ISRs (e.g. a future main-loop sender)
-  * must disable interrupts around its push.
+  * RX and TXE handling run in the USART2/USART3 ISRs at the same NVIC
+  * priority, so they never preempt each other. Producers outside the ISRs
+  * (UartRouter_SendToHost) mask interrupts around the ring push.
   ******************************************************************************
   */
 #include "uart_router.h"
@@ -16,37 +15,62 @@
 
 #define UART_ERR_FLAGS  (USART_SR_ORE | USART_SR_FE | USART_SR_NE | USART_SR_PE)
 
+typedef enum
+{
+  ROUTER_PORT_HOST = 0,  /* USART3: Raspberry Pi */
+  ROUTER_PORT_ADUC,      /* USART2: ADuCM355     */
+  ROUTER_PORT_COUNT
+  /* ROUTER_PORT_NFC (USART1) is added here when NFC routing is needed. */
+} RouterPort_t;
+
 typedef struct
 {
   USART_TypeDef *inst;
   IRQn_Type      irq;
   uint8_t        buf[ROUTER_TX_BUF_SIZE];
-  volatile uint16_t head; /* written by producer (peer RX ISR) */
-  volatile uint16_t tail; /* written by consumer (own TXE ISR) */
-} RouterPort_t;
+  volatile uint16_t head; /* written by producers */
+  volatile uint16_t tail; /* written by the TXE ISR */
+} RouterTxPort_t;
 
-static RouterPort_t s_uart2 = { USART2, USART2_IRQn };
-static RouterPort_t s_uart3 = { USART3, USART3_IRQn };
+static RouterTxPort_t s_ports[ROUTER_PORT_COUNT] =
+{
+  [ROUTER_PORT_HOST] = { USART3, USART3_IRQn },
+  [ROUTER_PORT_ADUC] = { USART2, USART2_IRQn },
+};
 static volatile uint32_t s_dropCount = 0U;
 
 /* Queues one byte for transmission on 'port' and arms its TXE interrupt. */
-static void Router_Push(RouterPort_t *port, uint8_t byte)
+static void Router_Push(RouterPort_t port, uint8_t byte)
 {
-  uint16_t next = (uint16_t)((port->head + 1U) & (ROUTER_TX_BUF_SIZE - 1U));
+  RouterTxPort_t *p = &s_ports[port];
+  uint16_t next = (uint16_t)((p->head + 1U) & (ROUTER_TX_BUF_SIZE - 1U));
 
-  if (next == port->tail)
+  if (next == p->tail)
   {
     s_dropCount++;
     return;
   }
-  port->buf[port->head] = byte;
-  port->head = next;
-  port->inst->CR1 |= USART_CR1_TXEIE;
+  p->buf[p->head] = byte;
+  p->head = next;
+  p->inst->CR1 |= USART_CR1_TXEIE;
 }
 
-static void Router_HandleIrq(RouterPort_t *self, RouterPort_t *peer)
+/* Routing rule: where a byte received on 'src' goes. Transparent bridge for
+   now; prefix routing ([AD]/[NF]) and board-local commands are added here. */
+static void UartRouter_Route(RouterPort_t src, uint8_t byte)
 {
-  USART_TypeDef *u = self->inst;
+  switch (src)
+  {
+    case ROUTER_PORT_HOST: Router_Push(ROUTER_PORT_ADUC, byte); break;
+    case ROUTER_PORT_ADUC: Router_Push(ROUTER_PORT_HOST, byte); break;
+    default: break;
+  }
+}
+
+static void Router_HandleIrq(RouterPort_t port)
+{
+  RouterTxPort_t *p = &s_ports[port];
+  USART_TypeDef *u = p->inst;
   uint32_t sr = u->SR;
 
   if ((sr & UART_ERR_FLAGS) != 0U)
@@ -56,22 +80,22 @@ static void Router_HandleIrq(RouterPort_t *self, RouterPort_t *peer)
     uint8_t d = (uint8_t)u->DR;
     if (((sr & USART_SR_ORE) != 0U) && ((sr & USART_SR_RXNE) != 0U))
     {
-      Router_Push(peer, d);
+      UartRouter_Route(port, d);
     }
     return;
   }
 
   if ((sr & USART_SR_RXNE) != 0U)
   {
-    Router_Push(peer, (uint8_t)u->DR);
+    UartRouter_Route(port, (uint8_t)u->DR);
   }
 
   if (((sr & USART_SR_TXE) != 0U) && ((u->CR1 & USART_CR1_TXEIE) != 0U))
   {
-    if (self->tail != self->head)
+    if (p->tail != p->head)
     {
-      u->DR = self->buf[self->tail];
-      self->tail = (uint16_t)((self->tail + 1U) & (ROUTER_TX_BUF_SIZE - 1U));
+      u->DR = p->buf[p->tail];
+      p->tail = (uint16_t)((p->tail + 1U) & (ROUTER_TX_BUF_SIZE - 1U));
     }
     else
     {
@@ -82,28 +106,66 @@ static void Router_HandleIrq(RouterPort_t *self, RouterPort_t *peer)
 
 void UartRouter_Init(void)
 {
-  s_uart2.head = s_uart2.tail = 0U;
-  s_uart3.head = s_uart3.tail = 0U;
+  uint32_t i;
 
-  USART2->CR1 |= USART_CR1_RXNEIE;
-  USART3->CR1 |= USART_CR1_RXNEIE;
-
-  HAL_NVIC_SetPriority(USART2_IRQn, ROUTER_IRQ_PRIORITY, 0);
-  HAL_NVIC_EnableIRQ(USART2_IRQn);
-  HAL_NVIC_SetPriority(USART3_IRQn, ROUTER_IRQ_PRIORITY, 0);
-  HAL_NVIC_EnableIRQ(USART3_IRQn);
+  for (i = 0U; i < (uint32_t)ROUTER_PORT_COUNT; i++)
+  {
+    s_ports[i].head = 0U;
+    s_ports[i].tail = 0U;
+    s_ports[i].inst->CR1 |= USART_CR1_RXNEIE;
+    HAL_NVIC_SetPriority(s_ports[i].irq, ROUTER_IRQ_PRIORITY, 0);
+    HAL_NVIC_EnableIRQ(s_ports[i].irq);
+  }
 }
 
 void UartRouter_IRQHandler(USART_TypeDef *instance)
 {
-  if (instance == USART3)
+  uint32_t i;
+
+  for (i = 0U; i < (uint32_t)ROUTER_PORT_COUNT; i++)
   {
-    Router_HandleIrq(&s_uart3, &s_uart2);
+    if (s_ports[i].inst == instance)
+    {
+      Router_HandleIrq((RouterPort_t)i);
+      return;
+    }
   }
-  else if (instance == USART2)
+}
+
+uint16_t UartRouter_SendToHost(const uint8_t *data, uint16_t len)
+{
+  uint16_t i;
+  uint16_t queued = 0U;
+  uint32_t primask = __get_PRIMASK();
+  uint32_t dropBefore;
+
+  __disable_irq();
+  dropBefore = s_dropCount;
+  for (i = 0U; i < len; i++)
   {
-    Router_HandleIrq(&s_uart2, &s_uart3);
+    Router_Push(ROUTER_PORT_HOST, data[i]);
   }
+  queued = (uint16_t)(len - (s_dropCount - dropBefore));
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return queued;
+}
+
+uint8_t UartRouter_IsIdle(void)
+{
+  uint32_t i;
+
+  for (i = 0U; i < (uint32_t)ROUTER_PORT_COUNT; i++)
+  {
+    if ((s_ports[i].head != s_ports[i].tail) ||
+        ((s_ports[i].inst->SR & USART_SR_TC) == 0U))
+    {
+      return 0U;
+    }
+  }
+  return 1U;
 }
 
 uint32_t UartRouter_GetDropCount(void)

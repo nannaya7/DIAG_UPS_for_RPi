@@ -1,13 +1,18 @@
 # CLAUDE.md
 
 Raspberry Pi(Radxa) 전원 공급용 UPS 보드(DIAG_UPS v1.2)의 STM32F103CB 펌웨어.
-툴체인: Keil MDK-ARM V5 (`MDK-ARM/cappic_UPS_stm32f103.uvprojx`), STM32Cube HAL (FW_F1 V1.8.7), CubeMX 6.18 (`DIAG_UPS_stm32f103.ioc`).
+툴체인: Keil MDK-ARM V5 (`MDK-ARM/DIAG_UPS_stm32f103.uvprojx`), STM32Cube HAL (FW_F1 V1.8.7), CubeMX 6.18 (`DIAG_UPS_stm32f103.ioc`).
 회로도: `DIAG_UPS1.2_SCH.pdf`. 문서: `docs/` (AT 프로토콜, 펌웨어 기술 레퍼런스, Radxa 매뉴얼).
 
 ## 디렉터리
 - `Core/` — CubeMX 생성 코드 (main.c, stm32f1xx_it.c, stm32f1xx_hal_msp.c). `USER CODE` 블록 밖은 재생성 시 덮어써짐.
 - `SRC/` — 애플리케이션 코드. 새 폴더 추가 시 uvprojx의 IncludePath/파일 그룹에도 등록해야 함.
-  - `myapp.c` 메인 스케줄러(`App_Start`), `POWER/` 전원 시퀀스·DCDC·ADC·슬립, `BATT/` MAX17048, `LED/` RGB LED(TIM1 PWM), `UART/` 통신, `DEBUG/` SEGGER RTT 로그.
+  - `myapp.c` 메인 스케줄러(`App_Start`: 초기화 후 `PowerControl_Update()` 루프).
+  - `POWER/` — `power_control`(전원 시퀀스·버튼·USB 감시), `dcdc`, `mcu_power`(상태), `sleep_mode`(TIM3 1Hz 틱/WFI).
+  - `BATT/` — `max17048`(드라이버), `batt_status`(NORMAL/LOW 상태), `batt_report`(ALRT 처리, 1분 주기 SOC/전압 보고).
+  - `LED/` — `rgb_led`(TIM1 PWM 효과 엔진), `led_indicator`(전원 소스/충전/버튼/종료 LED 패턴).
+  - `UART/` — `uart_router`(브리지, 포트 테이블 + `UartRouter_Route()` 라우팅 규칙), `at_protocol`(비활성).
+  - `DEBUG/` — SEGGER RTT 로그. 빌드에서 제외된 미사용 파일: `POWER/power_adc.*`, `UART/uart2_comm.*` (삭제 후보).
 - `MDK-ARM/` — Keil 프로젝트와 빌드 산출물 (산출물은 수정/커밋 대상 아님).
 
 ## UART 구성 (모두 115200bps, 8N1)
@@ -35,12 +40,12 @@ Raspberry Pi(Radxa) 전원 공급용 UPS 보드(DIAG_UPS v1.2)의 STM32F103CB �
 | 신호 | 핀 | 방향/비고 |
 |---|---|---|
 | BTN_PWR_IN | PA0 | EXTI0 (rising) |
-| USB_PWR_IN | PA6 | 입력 |
+| USB_PWR_IN | PA6 | 입력, USB 전원 감지 (HIGH = USB 연결) |
 | BATT_ADC_CTRL | PA7 | 출력 |
 | PWM_CH1/2/3 | PA8/PA9/PA10 | TIM1 CH1~3 (RGB LED) |
-| PWR_LED | PA11 | 출력 |
+| PWR_LED | PA11 | 사용 안 함, OFF = HIGH 고정 (.ioc PinState=SET) |
 | BOOST_EN | PA15 | 출력 |
-| USB_PLUG_IN | PB0 | 입력 |
+| USB_PLUG_IN | PB0 | 회로도 v1.2에서 미연결(부유) — 사용 금지 |
 | CHG_WKUP | PB12 | open-drain 출력, 평소 SET(해제) |
 | LDO_OUT | PB13 | 출력 |
 | VOUT_CTRL | PB14 | 출력 |
@@ -49,6 +54,10 @@ Raspberry Pi(Radxa) 전원 공급용 UPS 보드(DIAG_UPS v1.2)의 STM32F103CB �
 | SWD | PA13/PA14 | 디버그 |
 
 핀 매크로(`*_Pin`, `*_GPIO_Port`)는 `Core/Inc/main.h`에 정의되며 `.ioc` 라벨에서 생성된다. `main.h`와 `.ioc`가 어긋나지 않게 유지할 것.
+
+## LED 동작
+- 상태 LED는 PWM LED(RED=PWM_CH1/PA8, GRN=PWM_CH2/PA9, BLU=PWM_CH3/PA10)만 사용한다. PWR_LED(PA11)는 사용하지 않는다.
+- 전원 ON 상태: USB 전원 모드는 그린만, 배터리 모드(USB 플러그 아웃)는 블루만 **5초 주기로 0.3초 점멸**. 상수는 `led_indicator.c`의 `POWER_SRC_*`.
 
 ## 작업 규칙
 - 핀/UART/클럭 변경은 **`.ioc`를 먼저 수정**하고, 코드(`main.c`, `main.h`, `hal_msp.c`, `it.c`)를 .ioc와 일치시킨다. 수동 수정은 반드시 `USER CODE` 블록 안에 넣는다.

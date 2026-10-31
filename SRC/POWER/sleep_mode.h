@@ -3,12 +3,11 @@
   * @file    sleep_mode.h
   * @brief   Cortex-M SLEEP mode (WFI) with a TIM3-driven 1Hz wake tick.
   *
-  * SLEEP mode only clock-gates the CPU core -- all peripherals (DMA,
-  * USART2, EXTI, TIM3) keep running and any of their enabled interrupts
-  * wakes the core immediately: USART2 RX (IDLE line / DMA) and the PA0
-  * button (EXTI0) wake it with no extra code needed here, they're just
-  * regular NVIC interrupts. TIM3 is the deliberate ~1000ms "time to
-  * sample battery/DCDC and blink the LED" tick.
+  * SLEEP mode only clock-gates the CPU core -- all peripherals (USART,
+  * EXTI, TIM3) keep running and any of their enabled interrupts wakes the
+  * core: USART2/USART3 RX and the PA0 button (EXTI0) are regular NVIC
+  * interrupts. TIM3 is the deliberate ~1000ms tick for battery/USB handling.
+  *
   ******************************************************************************
   */
 #ifndef __SLEEP_MODE_H

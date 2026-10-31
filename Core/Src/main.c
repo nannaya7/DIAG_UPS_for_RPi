@@ -446,6 +446,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* PWR_LED is unused: keep it OFF (HIGH). The .ioc sets PinState=SET, so
+     regenerated code does this itself; kept here until then. */
+  HAL_GPIO_WritePin(PWR_LED_GPIO_Port, PWR_LED_Pin, GPIO_PIN_SET);
+
   /* BATT_ALT: MAX17048 ALRT is open-drain/active-low with no external
      pull-up on the board, so it needs an internal pull-up + falling-edge
      trigger -- CubeMX's default (NOPULL + IT_RISING) leaves the line

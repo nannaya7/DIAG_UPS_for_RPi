@@ -18,7 +18,8 @@ typedef enum
 {
   RGBLED_EFFECT_BREATHE = 0,  /* smooth ramp up then down, repeats forever  */
   RGBLED_EFFECT_BLINK,        /* hard on/off toggle at the given brightness */
-  RGBLED_EFFECT_FADE_OUT      /* one-shot ramp from peak to off, then stays off */
+  RGBLED_EFFECT_FADE_OUT,     /* one-shot ramp from peak to off, then stays off */
+  RGBLED_EFFECT_PULSE         /* short ON pulse once per period (RgbLed_SetPulse) */
 } RgbLedEffect_t;
 
 /**
@@ -56,6 +57,14 @@ void RgbLed_Off(void);
   */
 void RgbLed_SetEffect(RgbLedEffect_t effect, uint8_t red, uint8_t green,
                        uint8_t blue, uint32_t halfPeriodMs);
+
+/**
+  * @brief  Starts a pulse effect: LED on at (red,green,blue) for onMs at the
+  *         start of every periodMs, off for the rest. Same restart caveat as
+  *         RgbLed_SetEffect().
+  */
+void RgbLed_SetPulse(uint8_t red, uint8_t green, uint8_t blue,
+                      uint32_t onMs, uint32_t periodMs);
 
 /**
   * @brief  Advances the currently-selected effect based on HAL_GetTick()

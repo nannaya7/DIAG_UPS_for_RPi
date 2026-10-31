@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    at_protocol.h
   * @brief   AT-command line protocol between this MCU and the main board,
-  *          carried over USART2 (see uart2_comm.c/.h).
+  *          carried over the HOST port (see uart_router.c/.h).
   ******************************************************************************
   */
 #ifndef __AT_PROTOCOL_H
@@ -15,14 +15,13 @@ extern "C" {
 #include "main.h"
 
 /**
-  * @brief  Resets line-assembly and ACK-wait state. Call once after
-  *         Uart2Comm_Init().
+  * @brief  Resets line-assembly state. Call once after UartRouter_Init().
   */
 void AtProtocol_Init(void);
 
 /**
-  * @brief  Feeds newly-arrived USART2 RX bytes into the line assembler.
-  *         Called from Uart2Comm_ParseRxData(); not for direct use elsewhere.
+  * @brief  Feeds newly-arrived HOST (USART3) RX bytes into the line
+  *         assembler. Not called by anything while AT_PROTOCOL_ENABLED is 0.
   * @param  data Pointer to raw RX bytes.
   * @param  len  Number of bytes.
   */
